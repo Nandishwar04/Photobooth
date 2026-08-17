@@ -16,6 +16,41 @@ interface CameraContextValue {
 const CameraContext = createContext<CameraContextValue | null>(null);
 
 /**
+ * Attaches `stream` to `video` and waits for real frames to actually
+ * start arriving (videoWidth/videoHeight populate), rather than trusting
+ * `.play()` resolving as proof the feed is live. Re-assigning the exact
+ * same MediaStream object to a brand new <video> element (which is what
+ * happens when this stream survives a page navigation) doesn't reliably
+ * resume frame delivery on every mobile browser even though the camera
+ * hardware itself stays active — wrapping the existing tracks in a fresh
+ * MediaStream per attachment is cheap (no renegotiation with the camera)
+ * and sidesteps that per-element caching quirk.
+ */
+async function attachStream(video: HTMLVideoElement, stream: MediaStream, timeoutMs = 2500): Promise<boolean> {
+  const perElementStream = new MediaStream(stream.getVideoTracks());
+  video.srcObject = perElementStream;
+  await video.play().catch(() => undefined);
+
+  if (video.videoWidth && video.videoHeight) return true;
+
+  return new Promise((resolve) => {
+    const start = Date.now();
+    const check = () => {
+      if (video.videoWidth && video.videoHeight) {
+        resolve(true);
+        return;
+      }
+      if (Date.now() - start > timeoutMs) {
+        resolve(false);
+        return;
+      }
+      requestAnimationFrame(check);
+    };
+    requestAnimationFrame(check);
+  });
+}
+
+/**
  * Owns a single camera session for the entire booth flow (create/join ->
  * session), mounted once at the root layout so it survives client-side
  * navigation between those pages.
@@ -41,26 +76,33 @@ export function CameraProvider({ children }: { children: React.ReactNode }) {
     const hasLiveStream =
       streamRef.current && streamRef.current.getVideoTracks().some((t) => t.readyState === "live");
 
-    if (hasLiveStream) {
-      // Already have a working stream (e.g. we just navigated from
-      // /join to /session) — just re-attach it to this page's <video>.
-      if (videoRef.current && videoRef.current.srcObject !== streamRef.current) {
-        videoRef.current.srcObject = streamRef.current;
-        await videoRef.current.play().catch(() => undefined);
-      }
-      setStatus("ready");
-      setError(null);
-      return;
-    }
-
     setStatus("requesting");
     setError(null);
+
+    if (hasLiveStream && streamRef.current) {
+      // Already have a working stream (e.g. we just navigated from
+      // /join to /session) — re-attach it to this page's <video> rather
+      // than requesting the camera hardware again.
+      if (videoRef.current) {
+        const gotFrames = await attachStream(videoRef.current, streamRef.current);
+        if (gotFrames) {
+          setStatus("ready");
+          return;
+        }
+        // Reused attachment never produced a frame — release it and
+        // fall through to requesting a fresh stream instead of leaving
+        // the user stuck on a dead preview.
+        stopCamera(streamRef.current);
+        streamRef.current = null;
+      }
+    }
+
     try {
       const stream = await startCamera(options);
       streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play().catch(() => undefined);
+      const gotFrames = videoRef.current ? await attachStream(videoRef.current, stream) : true;
+      if (!gotFrames) {
+        throw new CameraError("UNKNOWN", "The camera connected but isn't sending video. Try again.");
       }
       setStatus("ready");
     } catch (err) {
