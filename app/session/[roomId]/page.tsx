@@ -69,15 +69,19 @@ export default function SessionPage() {
     sessionRef.current = session;
   }, [session]);
 
+  const [uploadErrorMessage, setUploadErrorMessage] = useState<string | null>(null);
+
   const performUpload = useCallback(
     async (blob: Blob, shotNumber: number, captureSeq: number) => {
       if (!creds) return;
       lastCaptureRef.current = { blob, shotNumber, captureSeq };
       setUploadState("uploading");
+      setUploadErrorMessage(null);
       try {
         await uploadPhotoWithRetry(roomId, creds, blob, shotNumber, captureSeq);
         setUploadState("idle");
-      } catch {
+      } catch (err) {
+        setUploadErrorMessage(err instanceof Error ? err.message : "Unknown error");
         setUploadState("error");
       }
     },
@@ -90,7 +94,8 @@ export default function SessionPage() {
     try {
       const blob = await captureFrame(videoRef.current, { mirror: true });
       await performUpload(blob, currentSession.current_shot, currentSession.capture_seq);
-    } catch {
+    } catch (err) {
+      setUploadErrorMessage(err instanceof Error ? err.message : "Camera capture failed");
       setUploadState("error");
     }
   }, [performUpload, videoRef]);
@@ -264,6 +269,10 @@ export default function SessionPage() {
         />
       )}
 
+      {session.status === "COUNTDOWN" && uploadState === "idle" && (
+        <p className="font-body text-sm text-umber">Waiting for the other photo…</p>
+      )}
+
       {uploadState === "uploading" && (
         <div className="flex items-center gap-2 font-body text-sm text-umber">
           <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
@@ -272,7 +281,9 @@ export default function SessionPage() {
       )}
       {uploadState === "error" && (
         <div className="flex flex-col items-center gap-2 text-center">
-          <p className="font-body text-sm text-rose">Couldn&apos;t save your photo.</p>
+          <p className="font-body text-sm text-rose">
+            Couldn&apos;t save your photo{uploadErrorMessage ? `: ${uploadErrorMessage}` : "."}
+          </p>
           <button onClick={retryUpload} className="rounded-full bg-rose px-4 py-2 font-body text-sm text-cream">
             Retry
           </button>

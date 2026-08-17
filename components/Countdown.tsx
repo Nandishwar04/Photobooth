@@ -29,6 +29,7 @@ export function Countdown({ captureAt, offsetMs, onCapture }: CountdownProps) {
     Math.max(0, new Date(captureAt).getTime() - offsetMs - Date.now())
   );
   const [fired, setFired] = useState(false);
+  const [overlayVisible, setOverlayVisible] = useState(true);
   const onCaptureRef = useRef(onCapture);
   useEffect(() => {
     onCaptureRef.current = onCapture;
@@ -47,8 +48,23 @@ export function Countdown({ captureAt, offsetMs, onCapture }: CountdownProps) {
     return () => handle.cancel();
   }, [captureAt, offsetMs]);
 
+  // The overlay's only job is the dramatic 3-2-1-CAPTURE moment. It must
+  // not stay mounted waiting for the server to confirm both sides
+  // uploaded — that can take a few seconds (or fail entirely on a slow
+  // connection), and this is a fixed, full-viewport, z-50 layer that
+  // would otherwise bury the camera preview and any upload/error UI
+  // underneath it for as long as it's up. So it self-dismisses shortly
+  // after the flash, regardless of upload/session state.
+  useEffect(() => {
+    if (!fired) return;
+    const t = setTimeout(() => setOverlayVisible(false), 650);
+    return () => clearTimeout(t);
+  }, [fired]);
+
   const secondsLeft = Math.ceil(remainingMs / 1000);
   const display = fired ? "CAPTURE" : secondsLeft > 0 ? String(secondsLeft) : "";
+
+  if (!overlayVisible) return null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/80 backdrop-blur-sm">
