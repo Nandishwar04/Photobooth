@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { Heart, Loader2 } from "lucide-react";
-import { useCamera } from "@/hooks/useCamera";
+import { useSharedCamera } from "@/contexts/CameraContext";
 import { CameraPreview } from "@/components/CameraPreview";
 import { fetchSession, joinSession, ApiRequestError } from "@/lib/photoStorage";
 import { loadCredentials, saveCredentials } from "@/lib/credentials";
@@ -14,7 +14,7 @@ export default function JoinPage() {
   const params = useParams<{ roomId: string }>();
   const roomId = params.roomId.toUpperCase();
   const router = useRouter();
-  const { videoRef, status, error, requestCamera } = useCamera({ facingMode: "user" });
+  const { videoRef, status, error, requestCamera } = useSharedCamera();
   const [phase, setPhase] = useState<Phase>("checking");
   const [message, setMessage] = useState<string | null>(null);
 
@@ -46,7 +46,7 @@ export default function JoinPage() {
 
   async function beginJoin(existingToken?: string) {
     setPhase("camera");
-    await requestCamera();
+    await requestCamera({ facingMode: "user" });
     setPhase("joining");
     try {
       const { token } = await joinSession(roomId, existingToken);
@@ -136,7 +136,7 @@ export default function JoinPage() {
               your browser settings and try again.
             </p>
             <button
-              onClick={requestCamera}
+              onClick={() => void requestCamera({ facingMode: "user" })}
               className="rounded-full border border-rose px-5 py-2.5 font-body text-sm text-rose"
             >
               Try again

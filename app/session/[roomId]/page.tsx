@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { Loader2, Link2, Copy, Check } from "lucide-react";
-import { useCamera } from "@/hooks/useCamera";
+import { useSharedCamera } from "@/contexts/CameraContext";
 import { useSessionRealtime } from "@/hooks/useSessionRealtime";
 import { CameraPreview } from "@/components/CameraPreview";
 import { CaptureButton } from "@/components/CaptureButton";
@@ -40,16 +40,14 @@ export default function SessionPage() {
   const role = creds?.role ?? null;
   const { session, loading, error, otherPresent, refetch } = useSessionRealtime(roomId, role);
 
-  const { videoRef, status: cameraStatus, error: cameraError, requestCamera } = useCamera({
-    facingMode: "user",
-  });
+  const { videoRef, status: cameraStatus, error: cameraError, requestCamera } = useSharedCamera();
 
   const [offsetMs, setOffsetMs] = useState(0);
   const [offsetReady, setOffsetReady] = useState(false);
 
   useEffect(() => {
     if (!creds) return;
-    void requestCamera();
+    void requestCamera({ facingMode: "user" });
     measureClockOffset().then((sync) => {
       setOffsetMs(sync.offsetMs);
       setOffsetReady(true);

@@ -9,12 +9,21 @@ import { BirthdayMessage } from "@/components/BirthdayMessage";
 import { loadCredentials } from "@/lib/credentials";
 import { fetchSession, fetchFinalStripUrl, resetSession } from "@/lib/photoStorage";
 import { useSessionRealtime } from "@/hooks/useSessionRealtime";
+import { useSharedCamera } from "@/contexts/CameraContext";
 import type { StoredCredentials } from "@/types/photobooth";
 
 export default function ResultsPage() {
   const params = useParams<{ roomId: string }>();
   const roomId = params.roomId.toUpperCase();
   const router = useRouter();
+
+  const { releaseCamera } = useSharedCamera();
+  useEffect(() => {
+    // The camera is no longer needed once results are up — release the
+    // hardware/indicator rather than leaving it running in the background.
+    releaseCamera();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const [creds] = useState<StoredCredentials | null>(() => loadCredentials(roomId));
   const [imageUrl, setImageUrl] = useState<string | null>(null);

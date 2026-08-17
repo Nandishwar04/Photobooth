@@ -84,6 +84,28 @@ export function stopCamera(stream: MediaStream | null): void {
 }
 
 /**
+ * Waits briefly for a live MediaStream's frames to actually reach the
+ * <video> element (videoWidth/videoHeight populate once real frames are
+ * decoding). Normally instant, but a short grace window is cheap
+ * insurance against rare timing hiccups right after a stream is
+ * (re)attached, rather than failing a synchronized capture outright.
+ */
+function waitForVideoDimensions(video: HTMLVideoElement, timeoutMs = 800): Promise<void> {
+  if (video.videoWidth && video.videoHeight) return Promise.resolve();
+  return new Promise((resolve) => {
+    const start = Date.now();
+    const check = () => {
+      if ((video.videoWidth && video.videoHeight) || Date.now() - start > timeoutMs) {
+        resolve();
+        return;
+      }
+      requestAnimationFrame(check);
+    };
+    requestAnimationFrame(check);
+  });
+}
+
+/**
  * Grabs the current video frame into a JPEG blob via an offscreen
  * canvas. Mirrors the video horizontally when `mirror` is true so a
  * front-facing camera preview matches what the user sees of themself
@@ -95,6 +117,7 @@ export async function captureFrame(
 ): Promise<Blob> {
   const { mirror = false, maxWidth = 1280, quality = 0.85 } = options;
 
+  await waitForVideoDimensions(video);
   const sourceWidth = video.videoWidth;
   const sourceHeight = video.videoHeight;
   if (!sourceWidth || !sourceHeight) {

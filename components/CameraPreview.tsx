@@ -3,7 +3,7 @@
 import { RefObject } from "react";
 import { CameraOff, Loader2 } from "lucide-react";
 import clsx from "clsx";
-import type { CameraStatus } from "@/hooks/useCamera";
+import type { CameraStatus } from "@/contexts/CameraContext";
 import type { CameraError } from "@/lib/camera";
 
 interface CameraPreviewProps {

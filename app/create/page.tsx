@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Loader2, CameraOff } from "lucide-react";
-import { useCamera } from "@/hooks/useCamera";
+import { useSharedCamera } from "@/contexts/CameraContext";
 import { CameraPreview } from "@/components/CameraPreview";
 import { createSession } from "@/lib/photoStorage";
 import { saveCredentials } from "@/lib/credentials";
@@ -12,7 +12,7 @@ type Step = "camera" | "creating" | "error";
 
 export default function CreatePage() {
   const router = useRouter();
-  const { videoRef, status, error, requestCamera } = useCamera({ facingMode: "user" });
+  const { videoRef, status, error, requestCamera } = useSharedCamera();
   const [step, setStep] = useState<Step>("camera");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const startedRef = useRef(false);
@@ -25,7 +25,7 @@ export default function CreatePage() {
   }, []);
 
   async function run() {
-    await requestCamera();
+    await requestCamera({ facingMode: "user" });
     setStep("creating");
     try {
       const { roomId, token } = await createSession();
@@ -55,7 +55,7 @@ export default function CreatePage() {
 
         {status === "error" && (
           <button
-            onClick={requestCamera}
+            onClick={() => void requestCamera({ facingMode: "user" })}
             className="rounded-full border border-rose px-5 py-2.5 font-body text-sm text-rose"
           >
             Try camera again
