@@ -160,7 +160,13 @@ npm run typecheck        # tsc --noEmit, strict mode
    serverless Route Handler (`export const runtime = "nodejs"`), so it
    fits Vercel's default serverless model with no custom server.
 5. `vercel.json` already wires up a Vercel Cron job hitting
-   `/api/cron/expire` hourly to sweep expired sessions. If you set
+   `/api/cron/expire` once daily (03:00 UTC) to sweep expired sessions —
+   Vercel's Hobby plan caps cron jobs at once per day, so this is set
+   conservatively rather than hourly. This is just housekeeping, not
+   load-bearing: `loadSession()` also lazily flips a session to `EXPIRED`
+   the moment anyone reads it past `expires_at`, so a slower sweep doesn't
+   let expired rooms keep working. If you're on Vercel Pro, feel free to
+   tighten the schedule (e.g. `"0 * * * *"` for hourly). If you set
    `CRON_SECRET`, Vercel Cron automatically sends it as a Bearer token.
 
 ## 10. Testing with a laptop + a phone
@@ -243,7 +249,7 @@ allows" means here.
 Sessions default to a 24-hour lifetime (`SESSION_EXPIRY_HOURS`). Expiry is
 enforced two ways: lazily, any read of a session (`lib/sessionServer.ts
 loadSession`) flips it to `EXPIRED` on the spot if `expires_at` has passed;
-and via the hourly Vercel Cron hitting `/api/cron/expire`, which just keeps
+and via the daily Vercel Cron hitting `/api/cron/expire`, which just keeps
 stale rows tidy for anyone polling without an active client. Photos
 themselves aren't separately deleted by this app (Supabase Storage lifecycle
 rules or a scheduled cleanup job would be the next step if you want hard
