@@ -105,10 +105,16 @@ Open http://localhost:3000.
      all, so they're only reachable via the service-role key.
    - A private Storage bucket named `photobooth`.
    - An `expire_stale_sessions()` function for the cron sweep.
-3. Enable Realtime for the `sessions` table (Database → Replication →
-   toggle `sessions` on) if it isn't already covered by the default
-   publication.
-4. Grab your project URL, `anon` public key, and `service_role` secret key
+   - `sessions` added to the `supabase_realtime` publication — this is
+     what makes cross-device state sync actually work
+     (`hooks/useSessionRealtime.ts` subscribes to `UPDATE`s on this
+     table). It's easy to miss doing manually, so the migration handles
+     it directly rather than relying on a dashboard click. You can verify
+     it under Database → Publications → `supabase_realtime` → `sessions`
+     should be checked. (Database → **Replication** in newer dashboard
+     versions is a different feature — read replicas / analytics
+     pipelines — and isn't related to this.)
+3. Grab your project URL, `anon` public key, and `service_role` secret key
    from Project Settings → API.
 
 ## 5. Environment variables

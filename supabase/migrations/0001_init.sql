@@ -76,6 +76,25 @@ create trigger trg_sessions_updated_at
   before update on sessions
   for each row execute function set_updated_at();
 
+-- Realtime -----------------------------------------------------------------
+-- The app's entire cross-device sync depends on `sessions` row UPDATEs
+-- being broadcast over Supabase Realtime (see hooks/useSessionRealtime.ts).
+-- That requires the table to be a member of the `supabase_realtime`
+-- publication — it is NOT included by default on most Supabase projects.
+-- Guarded with an existence check since ALTER PUBLICATION ... ADD TABLE
+-- errors (rather than no-ops) if the table is already a member.
+do $$
+begin
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public'
+      and tablename = 'sessions'
+  ) then
+    alter publication supabase_realtime add table sessions;
+  end if;
+end $$;
+
 -- Row Level Security -------------------------------------------------------
 
 alter table sessions enable row level security;
