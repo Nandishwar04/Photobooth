@@ -82,49 +82,41 @@ export async function POST(
     );
     if (insertError) throw new ApiError(500, "Could not save your photo. Please try again.");
 
-    const uploadedField = role === "HOST" ? "host_shot_uploaded" : "guest_shot_uploaded";
+    console.log(
+      `[UPLOAD] session=${roomId} role=${role} shot=${session.current_shot} ` +
+        `captureSeq=${claimedSeq} previousStatus=${session.status}`
+    );
+    console.log("[UPLOAD] photo metadata inserted for", role, "shot", session.current_shot);
 
-    // Re-read to make the "did both sides finish" check atomic-enough:
-    // reload right before flipping the flag, then decide with fresh data.
-    const { data: current, error: reloadError } = await supabase
-      .from("sessions")
-      .select("*")
-      .eq("id", session.id)
-      .single();
-    if (reloadError || !current) throw new ApiError(500, "Something went wrong.");
-    if (current.capture_seq !== claimedSeq) {
-      // The round moved on while we were uploading (other side already
-      // advanced it) — our photo is saved, nothing further to do.
+    // Flag-set + "did both sides finish" check + advancement all happen
+    // inside a single atomic UPDATE in this function (see migration
+    // 0002_atomic_shot_completion.sql) — a separate SELECT-then-UPDATE
+    // from application code can't be made race-free against two
+    // requests arriving within milliseconds of each other, which is
+    // exactly what synchronized capture produces on every shot.
+    const { data: advanced, error: advanceError } = await supabase.rpc("advance_shot_on_upload", {
+      p_session_id: session.id,
+      p_role: role,
+      p_capture_seq: claimedSeq,
+    });
+    if (advanceError) {
+      console.log("[UPLOAD] advance_shot_on_upload error:", advanceError.message);
+      throw new ApiError(500, "Something went wrong.");
+    }
+
+    if (!advanced) {
+      // capture_seq moved on under us — the round already advanced via
+      // the other participant's request; our photo is saved regardless.
+      console.log("[UPLOAD] capture round already moved on, nothing further to do");
       return NextResponse.json({ ok: true });
     }
 
-    const otherAlreadyUploaded =
-      role === "HOST" ? current.guest_shot_uploaded : current.host_shot_uploaded;
-
-    if (otherAlreadyUploaded) {
-      const isLastShot = current.current_shot >= current.total_shots;
-      await supabase
-        .from("sessions")
-        .update(
-          isLastShot
-            ? { status: "FINALIZING", host_shot_uploaded: false, guest_shot_uploaded: false }
-            : {
-                status: "READY",
-                current_shot: current.current_shot + 1,
-                capture_at: null,
-                host_shot_uploaded: false,
-                guest_shot_uploaded: false,
-              }
-        )
-        .eq("id", session.id)
-        .eq("capture_seq", claimedSeq);
-    } else {
-      await supabase
-        .from("sessions")
-        .update({ [uploadedField]: true })
-        .eq("id", session.id)
-        .eq("capture_seq", claimedSeq);
-    }
+    console.log(
+      `[UPLOAD] host_shot_uploaded=${advanced.host_shot_uploaded} ` +
+        `guest_shot_uploaded=${advanced.guest_shot_uploaded} ` +
+        `both=${advanced.host_shot_uploaded && advanced.guest_shot_uploaded} ` +
+        `nextStatus=${advanced.status} currentShot=${advanced.current_shot}`
+    );
 
     return NextResponse.json({ ok: true });
   } catch (err) {

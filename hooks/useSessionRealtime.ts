@@ -54,6 +54,7 @@ export function useSessionRealtime(
 
     if (!selfRole) return;
 
+    console.log("[REALTIME] subscribing session room:", roomId);
     const supabase = getSupabaseBrowserClient();
     const channel = supabase
       .channel(`room:${roomId}`, { config: { presence: { key: selfRole } } })
@@ -67,7 +68,12 @@ export function useSessionRealtime(
         },
         (payload) => {
           if (cancelled) return;
-          setSession(payload.new as PublicSession);
+          const next = payload.new as PublicSession;
+          console.log(
+            `[REALTIME] event received status=${next.status} currentShot=${next.current_shot} ` +
+              `captureSeq=${next.capture_seq}`
+          );
+          setSession(next);
         }
       )
       .on("presence", { event: "sync" }, () => {
@@ -76,13 +82,25 @@ export function useSessionRealtime(
         setOtherPresent(Boolean(state[otherRole]?.length));
       })
       .subscribe(async (status) => {
+        console.log("[REALTIME] subscription status:", status);
         if (status === "SUBSCRIBED") {
           await channel.track({ role: selfRole, at: Date.now() });
         }
       });
 
+    // Modest fallback: Realtime is the primary sync mechanism, but a
+    // dropped/missed event shouldn't be able to strand a participant
+    // mid-shoot. A low-frequency background reconciliation poll costs
+    // one small GET every few seconds and guarantees the authoritative
+    // server state eventually reaches this client even if a realtime
+    // event never arrives.
+    const pollId = setInterval(() => {
+      if (!cancelled) refetch();
+    }, 4000);
+
     return () => {
       cancelled = true;
+      clearInterval(pollId);
       supabase.removeChannel(channel);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
