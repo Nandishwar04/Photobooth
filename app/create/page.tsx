@@ -51,6 +51,7 @@ export default function CreatePage() {
           error={error}
           orientation="landscape"
           className="w-full"
+          debug
         />
 
         {status === "error" && (

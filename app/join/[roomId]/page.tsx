@@ -128,6 +128,7 @@ export default function JoinPage() {
           error={error}
           orientation="portrait"
           className="w-full max-w-[320px]"
+          debug
         />
         {status === "error" && (
           <div className="flex flex-col items-center gap-3 text-center">

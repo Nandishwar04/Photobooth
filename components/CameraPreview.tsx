@@ -1,6 +1,6 @@
 "use client";
 
-import { RefObject } from "react";
+import { RefObject, useEffect, useState } from "react";
 import { CameraOff, Loader2 } from "lucide-react";
 import clsx from "clsx";
 import type { CameraStatus } from "@/contexts/CameraContext";
@@ -13,6 +13,28 @@ interface CameraPreviewProps {
   orientation: "landscape" | "portrait";
   mirror?: boolean;
   className?: string;
+  /** Temporary on-screen diagnostics while we track down a live camera bug. */
+  debug?: boolean;
+}
+
+function useVideoDebugInfo(videoRef: RefObject<HTMLVideoElement>, enabled: boolean) {
+  const [info, setInfo] = useState("");
+  useEffect(() => {
+    if (!enabled) return;
+    const id = setInterval(() => {
+      const v = videoRef.current;
+      if (!v) {
+        setInfo("no <video> element");
+        return;
+      }
+      setInfo(
+        `rs=${v.readyState} paused=${v.paused} ${v.videoWidth}x${v.videoHeight} ` +
+          `src=${v.srcObject ? "set" : "none"} muted=${v.muted}`
+      );
+    }, 400);
+    return () => clearInterval(id);
+  }, [videoRef, enabled]);
+  return info;
 }
 
 export function CameraPreview({
@@ -22,7 +44,9 @@ export function CameraPreview({
   orientation,
   mirror = true,
   className,
+  debug = false,
 }: CameraPreviewProps) {
+  const debugInfo = useVideoDebugInfo(videoRef, debug);
   return (
     <div
       className={clsx(
@@ -68,6 +92,12 @@ export function CameraPreview({
       )}
 
       <div className="pointer-events-none absolute inset-0 rounded-[28px] ring-1 ring-inset ring-cream/10" />
+
+      {debug && (
+        <div className="absolute bottom-1 left-1 right-1 rounded bg-black/70 px-1.5 py-1 font-mono text-[9px] leading-tight text-lime-300">
+          status={status} {debugInfo}
+        </div>
+      )}
     </div>
   );
 }
