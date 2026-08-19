@@ -42,11 +42,27 @@ export default function SessionPage() {
 
   const { videoRef, status: cameraStatus, error: cameraError, requestCamera } = useSharedCamera();
 
+  useEffect(() => {
+    console.log("[SESSION] camera component mounted, role:", role);
+    return () => console.log("[SESSION] camera component unmounted, role:", role);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (session) {
+      console.log(
+        `[SESSION] status=${session.status} currentShot=${session.current_shot}/${session.total_shots} ` +
+          `captureSeq=${session.capture_seq} round=${session.round}`
+      );
+    }
+  }, [session]);
+
   const [offsetMs, setOffsetMs] = useState(0);
   const [offsetReady, setOffsetReady] = useState(false);
 
   useEffect(() => {
     if (!creds) return;
+    console.log("[SESSION] requesting camera for role:", creds.role);
     void requestCamera({ facingMode: "user" });
     measureClockOffset().then((sync) => {
       setOffsetMs(sync.offsetMs);

@@ -27,9 +27,14 @@ function useVideoDebugInfo(videoRef: RefObject<HTMLVideoElement>, enabled: boole
         setInfo("no <video> element");
         return;
       }
+      const stream = v.srcObject instanceof MediaStream ? v.srcObject : null;
+      const track = stream?.getVideoTracks()[0];
+      const trackInfo = track
+        ? `track:${track.readyState}/en=${track.enabled}/mu=${track.muted}`
+        : "track:none";
       setInfo(
         `rs=${v.readyState} paused=${v.paused} ${v.videoWidth}x${v.videoHeight} ` +
-          `src=${v.srcObject ? "set" : "none"} muted=${v.muted}`
+          `src=${stream ? "set" : "none"} vmuted=${v.muted} ${trackInfo}`
       );
     }, 400);
     return () => clearInterval(id);

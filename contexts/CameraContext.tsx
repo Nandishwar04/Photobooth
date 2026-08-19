@@ -15,32 +15,60 @@ interface CameraContextValue {
 
 const CameraContext = createContext<CameraContextValue | null>(null);
 
+function logTrack(label: string, stream: MediaStream) {
+  const track = stream.getVideoTracks()[0];
+  if (!track) {
+    console.log(`[CAMERA] ${label}: no video track on stream`);
+    return;
+  }
+  console.log(
+    `[CAMERA] ${label}: readyState=${track.readyState} enabled=${track.enabled} ` +
+      `muted=${track.muted} label="${track.label}" settings=`,
+    track.getSettings()
+  );
+}
+
 /**
- * Attaches `stream` to `video` and waits for real frames to actually
- * start arriving (videoWidth/videoHeight populate), rather than trusting
- * `.play()` resolving as proof the feed is live. Re-assigning the exact
- * same MediaStream object to a brand new <video> element (which is what
- * happens when this stream survives a page navigation) doesn't reliably
- * resume frame delivery on every mobile browser even though the camera
- * hardware itself stays active — wrapping the existing tracks in a fresh
- * MediaStream per attachment is cheap (no renegotiation with the camera)
- * and sidesteps that per-element caching quirk.
+ * Attaches `stream` directly to `video` (the SAME MediaStream object,
+ * not a synthesized copy — see the comment on CameraProvider below for
+ * why that distinction matters) and waits for real frames to actually
+ * arrive (videoWidth/videoHeight populate) rather than trusting
+ * `.play()` resolving as proof the feed is live.
  */
 async function attachStream(video: HTMLVideoElement, stream: MediaStream, timeoutMs = 2500): Promise<boolean> {
-  const perElementStream = new MediaStream(stream.getVideoTracks());
-  video.srcObject = perElementStream;
-  await video.play().catch(() => undefined);
+  console.log("[CAMERA] attachStream: assigning srcObject, stream id:", stream.id);
+  video.srcObject = stream;
+  console.log("[CAMERA] attachStream: srcObject === stream ?", video.srcObject === stream);
 
-  if (video.videoWidth && video.videoHeight) return true;
+  try {
+    await video.play();
+    console.log("[CAMERA] attachStream: video.play() resolved");
+  } catch (err) {
+    console.log("[CAMERA] attachStream: video.play() rejected:", err);
+  }
 
+  if (video.videoWidth && video.videoHeight) {
+    console.log(`[CAMERA] attachStream: dimensions already available ${video.videoWidth}x${video.videoHeight}`);
+    return true;
+  }
+
+  console.log("[CAMERA] attachStream: waiting for dimensions...");
   return new Promise((resolve) => {
     const start = Date.now();
     const check = () => {
       if (video.videoWidth && video.videoHeight) {
+        console.log(
+          `[CAMERA] attachStream: dimensions arrived after ${Date.now() - start}ms: ` +
+            `${video.videoWidth}x${video.videoHeight} readyState=${video.readyState}`
+        );
         resolve(true);
         return;
       }
       if (Date.now() - start > timeoutMs) {
+        console.log(
+          `[CAMERA] attachStream: TIMED OUT after ${timeoutMs}ms waiting for dimensions. ` +
+            `readyState=${video.readyState} paused=${video.paused} networkState=${video.networkState}`
+        );
         resolve(false);
         return;
       }
@@ -57,14 +85,24 @@ async function attachStream(video: HTMLVideoElement, stream: MediaStream, timeou
  *
  * Why this exists: each page used to call getUserMedia() independently.
  * Navigating from /join to /session tore down the join page's stream and
- * immediately requested a brand new one on the session page — and
- * browsers (mobile ones especially) don't always release camera hardware
- * instantly, so the new request could come back with a stalled video
- * element right when a synchronized capture needed it. Keeping the
- * MediaStream alive here and just re-attaching it to whichever page's
- * <video> element is currently mounted avoids that race entirely: no
- * teardown, no re-acquisition, no permission re-prompt, no gap in the
- * live preview.
+ * immediately requested a brand new one on the session page, and browsers
+ * don't always release camera hardware instantly, so the new request
+ * could come back stalled right when a synchronized capture needed it.
+ * Keeping the MediaStream alive here and re-attaching the SAME stream
+ * object to whichever page's <video> element is currently mounted avoids
+ * that race without needing to re-request hardware or re-prompt for
+ * permission.
+ *
+ * IMPORTANT: attach the original MediaStream object directly, not a
+ * `new MediaStream(stream.getVideoTracks())` copy. An earlier version of
+ * this file synthesized a fresh MediaStream wrapper per attachment on
+ * the theory that it would help the reused-stream case; that wrapping is
+ * a known-unreliable pattern on WebKit/Safari and some Android WebViews —
+ * the wrapped stream's tracks can report `readyState: "live"` (hardware
+ * stays on, hence the camera indicator staying lit) while the <video>
+ * element never actually decodes a frame. That regression affected the
+ * FRESH-acquisition path too (not just reuse), which is why it broke the
+ * host's very first camera attachment, not just cross-page navigation.
  */
 export function CameraProvider({ children }: { children: React.ReactNode }) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -73,47 +111,58 @@ export function CameraProvider({ children }: { children: React.ReactNode }) {
   const [error, setError] = useState<CameraError | null>(null);
 
   const requestCamera = useCallback(async (options: StartCameraOptions = { facingMode: "user" }) => {
+    console.log("[CAMERA] requestCamera called with options:", options);
     const hasLiveStream =
       streamRef.current && streamRef.current.getVideoTracks().some((t) => t.readyState === "live");
+    console.log("[CAMERA] hasLiveStream:", !!hasLiveStream);
 
     setStatus("requesting");
     setError(null);
 
     if (hasLiveStream && streamRef.current) {
-      // Already have a working stream (e.g. we just navigated from
-      // /join to /session) — re-attach it to this page's <video> rather
-      // than requesting the camera hardware again.
       if (videoRef.current) {
+        console.log("[CAMERA] reusing existing stream, video ref available:", !!videoRef.current);
         const gotFrames = await attachStream(videoRef.current, streamRef.current);
         if (gotFrames) {
+          console.log("[CAMERA] reuse succeeded, status -> ready");
           setStatus("ready");
           return;
         }
-        // Reused attachment never produced a frame — release it and
-        // fall through to requesting a fresh stream instead of leaving
-        // the user stuck on a dead preview.
+        console.log("[CAMERA] reuse produced no frames, releasing and requesting fresh stream");
         stopCamera(streamRef.current);
         streamRef.current = null;
+      } else {
+        console.log("[CAMERA] videoRef.current is null — video element not mounted yet");
       }
     }
 
     try {
+      console.log("[CAMERA] getUserMedia requested");
       const stream = await startCamera(options);
+      console.log("[CAMERA] getUserMedia success, stream id:", stream.id);
+      logTrack("new stream", stream);
       streamRef.current = stream;
+
+      if (!videoRef.current) {
+        console.log("[CAMERA] WARNING: videoRef.current is null right after getUserMedia success");
+      }
       const gotFrames = videoRef.current ? await attachStream(videoRef.current, stream) : true;
       if (!gotFrames) {
         throw new CameraError("UNKNOWN", "The camera connected but isn't sending video. Try again.");
       }
+      console.log("[CAMERA] status -> ready");
       setStatus("ready");
     } catch (err) {
       const camErr =
         err instanceof CameraError ? err : new CameraError("UNKNOWN", "Could not access the camera.");
+      console.log("[CAMERA] error:", camErr.reason, camErr.message, err);
       setError(camErr);
       setStatus("error");
     }
   }, []);
 
   const releaseCamera = useCallback(() => {
+    console.log("[CAMERA] releaseCamera called explicitly, stopping tracks");
     stopCamera(streamRef.current);
     streamRef.current = null;
     setStatus("idle");
@@ -121,6 +170,7 @@ export function CameraProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     return () => {
+      console.log("[CAMERA] CameraProvider unmount cleanup — stopping tracks");
       stopCamera(streamRef.current);
       streamRef.current = null;
     };

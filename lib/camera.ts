@@ -35,12 +35,27 @@ export function isCameraSupported(): boolean {
   );
 }
 
+/** Best-effort read of the camera permission state; not supported in every browser (notably Safari). */
+export async function queryCameraPermission(): Promise<"granted" | "denied" | "prompt" | "unsupported"> {
+  try {
+    if (!navigator.permissions?.query) return "unsupported";
+    const status = await navigator.permissions.query({ name: "camera" as PermissionName });
+    console.log("[CAMERA] permission state:", status.state);
+    return status.state as "granted" | "denied" | "prompt";
+  } catch (err) {
+    console.log("[CAMERA] permission query unsupported/failed:", err);
+    return "unsupported";
+  }
+}
+
 export async function startCamera(options: StartCameraOptions = {}): Promise<MediaStream> {
   if (!isCameraSupported()) {
     throw new CameraError("NOT_SUPPORTED", "This browser can't access a camera.");
   }
 
-  const constraints: MediaStreamConstraints = {
+  await queryCameraPermission();
+
+  const preferredConstraints: MediaStreamConstraints = {
     audio: false,
     video: {
       facingMode: options.facingMode ?? "user",
@@ -50,9 +65,19 @@ export async function startCamera(options: StartCameraOptions = {}): Promise<Med
   };
 
   try {
-    return await navigator.mediaDevices.getUserMedia(constraints);
+    console.log("[CAMERA] getUserMedia with preferred constraints:", preferredConstraints);
+    return await navigator.mediaDevices.getUserMedia(preferredConstraints);
   } catch (err) {
-    throw mapGetUserMediaError(err);
+    console.log("[CAMERA] preferred constraints failed:", err, "— retrying with plain {video: true}");
+    // Fall back to the simplest possible request. Some devices/browsers
+    // reject specific facingMode/resolution constraints (OverconstrainedError)
+    // even when a perfectly usable camera exists.
+    try {
+      return await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+    } catch (fallbackErr) {
+      console.log("[CAMERA] fallback constraints also failed:", fallbackErr);
+      throw mapGetUserMediaError(fallbackErr);
+    }
   }
 }
 
@@ -117,9 +142,14 @@ export async function captureFrame(
 ): Promise<Blob> {
   const { mirror = false, maxWidth = 1280, quality = 0.85 } = options;
 
+  console.log(
+    `[CAMERA] captureFrame: before wait — readyState=${video.readyState} paused=${video.paused} ` +
+      `${video.videoWidth}x${video.videoHeight} srcObject=${video.srcObject ? "set" : "none"}`
+  );
   await waitForVideoDimensions(video);
   const sourceWidth = video.videoWidth;
   const sourceHeight = video.videoHeight;
+  console.log(`[CAMERA] captureFrame: after wait — ${sourceWidth}x${sourceHeight}`);
   if (!sourceWidth || !sourceHeight) {
     throw new CameraError("UNKNOWN", "Camera isn't ready yet.");
   }
