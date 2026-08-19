@@ -12,7 +12,7 @@ type Step = "camera" | "creating" | "error";
 
 export default function CreatePage() {
   const router = useRouter();
-  const { videoRef, status, error, requestCamera } = useSharedCamera();
+  const { videoRef, setVideoElement, status, error, requestCamera } = useSharedCamera();
   const [step, setStep] = useState<Step>("camera");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const startedRef = useRef(false);
@@ -47,6 +47,7 @@ export default function CreatePage() {
 
         <CameraPreview
           videoRef={videoRef}
+          onVideoRef={setVideoElement}
           status={status}
           error={error}
           orientation="landscape"

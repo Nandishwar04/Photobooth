@@ -40,7 +40,13 @@ export default function SessionPage() {
   const role = creds?.role ?? null;
   const { session, loading, error, otherPresent, refetch } = useSessionRealtime(roomId, role);
 
-  const { videoRef, status: cameraStatus, error: cameraError, requestCamera } = useSharedCamera();
+  const {
+    videoRef,
+    setVideoElement,
+    status: cameraStatus,
+    error: cameraError,
+    requestCamera,
+  } = useSharedCamera();
 
   useEffect(() => {
     console.log("[SESSION] camera component mounted, role:", role);
@@ -227,6 +233,7 @@ export default function SessionPage() {
       <div className="w-full max-w-sm">
         <CameraPreview
           videoRef={videoRef}
+          onVideoRef={setVideoElement}
           status={cameraStatus}
           error={cameraError}
           orientation={orientation}

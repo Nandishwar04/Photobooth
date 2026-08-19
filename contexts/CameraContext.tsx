@@ -6,7 +6,10 @@ import { CameraError, startCamera, stopCamera, type StartCameraOptions } from "@
 export type CameraStatus = "idle" | "requesting" | "ready" | "error";
 
 interface CameraContextValue {
+  /** Read-only: current <video> element, kept in sync by setVideoElement. */
   videoRef: React.RefObject<HTMLVideoElement>;
+  /** Pass this as the <video>'s `ref` prop — NOT videoRef directly. */
+  setVideoElement: (element: HTMLVideoElement | null) => void;
   status: CameraStatus;
   error: CameraError | null;
   requestCamera: (options?: StartCameraOptions) => Promise<void>;
@@ -14,6 +17,10 @@ interface CameraContextValue {
 }
 
 const CameraContext = createContext<CameraContextValue | null>(null);
+
+function hasLiveVideoTrack(stream: MediaStream | null): stream is MediaStream {
+  return !!stream && stream.getVideoTracks().some((t) => t.readyState === "live");
+}
 
 function logTrack(label: string, stream: MediaStream) {
   const track = stream.getVideoTracks()[0];
@@ -29,16 +36,17 @@ function logTrack(label: string, stream: MediaStream) {
 }
 
 /**
- * Attaches `stream` directly to `video` (the SAME MediaStream object,
- * not a synthesized copy — see the comment on CameraProvider below for
- * why that distinction matters) and waits for real frames to actually
- * arrive (videoWidth/videoHeight populate) rather than trusting
- * `.play()` resolving as proof the feed is live.
+ * Attaches `stream` directly to `video` (the SAME MediaStream object, not
+ * a synthesized copy — an earlier version wrapped tracks in
+ * `new MediaStream(stream.getVideoTracks())` per attachment, which is an
+ * unreliable pattern on WebKit/Safari and some Android WebViews: tracks
+ * keep reporting readyState "live" while the <video> element never
+ * actually decodes a frame from the wrapper) and waits for real frames to
+ * arrive rather than trusting `.play()` resolving as proof the feed is live.
  */
 async function attachStream(video: HTMLVideoElement, stream: MediaStream, timeoutMs = 2500): Promise<boolean> {
   console.log("[CAMERA] attachStream: assigning srcObject, stream id:", stream.id);
   video.srcObject = stream;
-  console.log("[CAMERA] attachStream: srcObject === stream ?", video.srcObject === stream);
 
   try {
     await video.play();
@@ -83,59 +91,79 @@ async function attachStream(video: HTMLVideoElement, stream: MediaStream, timeou
  * session), mounted once at the root layout so it survives client-side
  * navigation between those pages.
  *
- * Why this exists: each page used to call getUserMedia() independently.
- * Navigating from /join to /session tore down the join page's stream and
- * immediately requested a brand new one on the session page, and browsers
- * don't always release camera hardware instantly, so the new request
- * could come back stalled right when a synchronized capture needed it.
- * Keeping the MediaStream alive here and re-attaching the SAME stream
- * object to whichever page's <video> element is currently mounted avoids
- * that race without needing to re-request hardware or re-prompt for
- * permission.
+ * Stream ACQUISITION (getUserMedia) and stream ATTACHMENT (assigning
+ * srcObject to a <video> element) are deliberately separate operations
+ * here, triggered by two different, independent events:
  *
- * IMPORTANT: attach the original MediaStream object directly, not a
- * `new MediaStream(stream.getVideoTracks())` copy. An earlier version of
- * this file synthesized a fresh MediaStream wrapper per attachment on
- * the theory that it would help the reused-stream case; that wrapping is
- * a known-unreliable pattern on WebKit/Safari and some Android WebViews —
- * the wrapped stream's tracks can report `readyState: "live"` (hardware
- * stays on, hence the camera indicator staying lit) while the <video>
- * element never actually decodes a frame. That regression affected the
- * FRESH-acquisition path too (not just reuse), which is why it broke the
- * host's very first camera attachment, not just cross-page navigation.
+ *   - requestCamera() acquires a stream (or reuses the existing one).
+ *   - setVideoElement() — passed as the <video ref={...}> callback —
+ *     attaches whatever stream currently exists the instant any page's
+ *     video element mounts.
+ *
+ * This matters because a page's first render can happen before its own
+ * data has loaded (e.g. SessionPage renders a loading spinner — no
+ * CameraPreview, no <video> — until `session` arrives), while its camera
+ * effect still fires on that same first render since it only depends on
+ * `creds`, which is available immediately. Coupling attachment to
+ * "whichever ran first, the effect or the mount" was the root cause of
+ * the stream being acquired successfully but never attached to any
+ * video element. A callback ref makes attachment happen exactly when a
+ * video element becomes available, regardless of which happens first.
  */
 export function CameraProvider({ children }: { children: React.ReactNode }) {
-  const videoRef = useRef<HTMLVideoElement>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const [status, setStatus] = useState<CameraStatus>("idle");
   const [error, setError] = useState<CameraError | null>(null);
 
+  const setVideoElement = useCallback((element: HTMLVideoElement | null) => {
+    console.log("[CAMERA] video element ref:", element ? "mounted" : "unmounted");
+    videoRef.current = element;
+
+    if (element && hasLiveVideoTrack(streamRef.current)) {
+      console.log("[CAMERA] attaching existing stream to newly mounted video");
+      const stream = streamRef.current;
+      void attachStream(element, stream).then((gotFrames) => {
+        // Bail if a different/newer video element replaced this one
+        // while we were awaiting attachment.
+        if (videoRef.current !== element) return;
+        if (gotFrames) {
+          setStatus("ready");
+        } else {
+          setError(new CameraError("UNKNOWN", "The camera connected but isn't sending video. Try again."));
+          setStatus("error");
+        }
+      });
+    }
+  }, []);
+
   const requestCamera = useCallback(async (options: StartCameraOptions = { facingMode: "user" }) => {
     console.log("[CAMERA] requestCamera called with options:", options);
-    const hasLiveStream =
-      streamRef.current && streamRef.current.getVideoTracks().some((t) => t.readyState === "live");
-    console.log("[CAMERA] hasLiveStream:", !!hasLiveStream);
+    const reusable = hasLiveVideoTrack(streamRef.current);
+    console.log("[CAMERA] existing live stream to reuse:", reusable);
+
+    if (reusable && streamRef.current) {
+      // A live stream already exists — never acquire another one.
+      if (videoRef.current) {
+        setStatus("requesting");
+        const gotFrames = await attachStream(videoRef.current, streamRef.current);
+        if (gotFrames) {
+          setStatus("ready");
+        } else {
+          setError(new CameraError("UNKNOWN", "The camera connected but isn't sending video. Try again."));
+          setStatus("error");
+        }
+      } else {
+        // No video element mounted on this page yet — setVideoElement
+        // will attach the existing stream the moment one does.
+        console.log("[CAMERA] stream is live but no video element mounted yet; will attach on mount");
+        setStatus("requesting");
+      }
+      return;
+    }
 
     setStatus("requesting");
     setError(null);
-
-    if (hasLiveStream && streamRef.current) {
-      if (videoRef.current) {
-        console.log("[CAMERA] reusing existing stream, video ref available:", !!videoRef.current);
-        const gotFrames = await attachStream(videoRef.current, streamRef.current);
-        if (gotFrames) {
-          console.log("[CAMERA] reuse succeeded, status -> ready");
-          setStatus("ready");
-          return;
-        }
-        console.log("[CAMERA] reuse produced no frames, releasing and requesting fresh stream");
-        stopCamera(streamRef.current);
-        streamRef.current = null;
-      } else {
-        console.log("[CAMERA] videoRef.current is null — video element not mounted yet");
-      }
-    }
-
     try {
       console.log("[CAMERA] getUserMedia requested");
       const stream = await startCamera(options);
@@ -143,15 +171,18 @@ export function CameraProvider({ children }: { children: React.ReactNode }) {
       logTrack("new stream", stream);
       streamRef.current = stream;
 
-      if (!videoRef.current) {
-        console.log("[CAMERA] WARNING: videoRef.current is null right after getUserMedia success");
+      if (videoRef.current) {
+        const gotFrames = await attachStream(videoRef.current, stream);
+        if (!gotFrames) {
+          throw new CameraError("UNKNOWN", "The camera connected but isn't sending video. Try again.");
+        }
+        setStatus("ready");
+      } else {
+        // Video element isn't mounted yet (e.g. this page is still
+        // showing a loading state) — setVideoElement will attach this
+        // stream and flip status to "ready" once it mounts.
+        console.log("[CAMERA] stream acquired, no video element mounted yet; will attach on mount");
       }
-      const gotFrames = videoRef.current ? await attachStream(videoRef.current, stream) : true;
-      if (!gotFrames) {
-        throw new CameraError("UNKNOWN", "The camera connected but isn't sending video. Try again.");
-      }
-      console.log("[CAMERA] status -> ready");
-      setStatus("ready");
     } catch (err) {
       const camErr =
         err instanceof CameraError ? err : new CameraError("UNKNOWN", "Could not access the camera.");
@@ -177,7 +208,7 @@ export function CameraProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   return (
-    <CameraContext.Provider value={{ videoRef, status, error, requestCamera, releaseCamera }}>
+    <CameraContext.Provider value={{ videoRef, setVideoElement, status, error, requestCamera, releaseCamera }}>
       {children}
     </CameraContext.Provider>
   );

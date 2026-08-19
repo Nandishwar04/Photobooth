@@ -14,7 +14,7 @@ export default function JoinPage() {
   const params = useParams<{ roomId: string }>();
   const roomId = params.roomId.toUpperCase();
   const router = useRouter();
-  const { videoRef, status, error, requestCamera } = useSharedCamera();
+  const { videoRef, setVideoElement, status, error, requestCamera } = useSharedCamera();
   const [phase, setPhase] = useState<Phase>("checking");
   const [message, setMessage] = useState<string | null>(null);
 
@@ -124,6 +124,7 @@ export default function JoinPage() {
       <div className="flex w-full max-w-sm flex-col items-center gap-6">
         <CameraPreview
           videoRef={videoRef}
+          onVideoRef={setVideoElement}
           status={status}
           error={error}
           orientation="portrait"

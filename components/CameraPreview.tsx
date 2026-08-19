@@ -7,7 +7,10 @@ import type { CameraStatus } from "@/contexts/CameraContext";
 import type { CameraError } from "@/lib/camera";
 
 interface CameraPreviewProps {
+  /** Read-only — used here only to poll debug state. */
   videoRef: RefObject<HTMLVideoElement>;
+  /** The actual ref callback for the <video> element — attaches the shared stream on mount. */
+  onVideoRef: (element: HTMLVideoElement | null) => void;
   status: CameraStatus;
   error: CameraError | null;
   orientation: "landscape" | "portrait";
@@ -44,6 +47,7 @@ function useVideoDebugInfo(videoRef: RefObject<HTMLVideoElement>, enabled: boole
 
 export function CameraPreview({
   videoRef,
+  onVideoRef,
   status,
   error,
   orientation,
@@ -61,7 +65,7 @@ export function CameraPreview({
       )}
     >
       <video
-        ref={videoRef}
+        ref={onVideoRef}
         playsInline
         muted
         autoPlay
